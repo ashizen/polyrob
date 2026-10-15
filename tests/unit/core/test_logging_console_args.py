@@ -1,4 +1,3 @@
-@@ -0,0 +1,39 @@
 """Regression: the interactive-terminal formatter must interpolate %-style args.
 
 ``ComfyFormatter`` rendered ``str(record.msg)`` on a TTY, so a call like

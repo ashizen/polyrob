@@ -7,8 +7,10 @@ fetches are injected so the logic is unit-testable offline.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional, Tuple
 
@@ -25,6 +27,13 @@ def _version(text: str) -> Optional[Version]:
 # without a code change (§2.2 — the repo name is not hardcoded to a soon-gone value).
 _DEFAULT_REPO = "theselfruleorg/polyrob"
 _DEFAULT_PYPI = "polyrob"
+
+logger = logging.getLogger(__name__)
+
+# GitHub's releases API intermittently answers 200 with a bare ``[]`` for a repo that
+# has releases (seen ~1 reply in 6 for a few minutes at a time). A repo's release list
+# never legitimately goes to zero, so an empty reply is retried after these waits.
+_EMPTY_LIST_RETRY_WAITS = (1.0, 2.0)
 
 
 def parse_semver(text: str) -> Optional[Tuple[int, int, int]]:
@@ -174,12 +183,28 @@ def pypi_versions(fetch: Callable[[str], str], package: str = "polyrob") -> List
 
 def github_tag_versions(fetch: Callable[[str], str],
                        repo: str = "theselfruleorg/polyrob", *,
-                       include_prerelease: bool = False) -> List[str]:
-    """Release tag names from the GitHub Releases API."""
-    body = fetch(f"https://api.github.com/repos/{repo}/releases")
-    data = json.loads(body)
-    if not isinstance(data, list):
-        raise ValueError("expected a GitHub release list")
+                       include_prerelease: bool = False,
+                       sleep: Callable[[float], None] = time.sleep) -> List[str]:
+    """Release tag names from the GitHub Releases API. An empty list is retried
+    (``_EMPTY_LIST_RETRY_WAITS``) and each one logged, so a transient empty reply
+    neither aborts an update nor passes silently as "no releases"."""
+    url = f"https://api.github.com/repos/{repo}/releases"
+    waits = list(_EMPTY_LIST_RETRY_WAITS)
+    attempt = 0
+    while True:
+        attempt += 1
+        body = fetch(url)
+        data = json.loads(body)
+        if not isinstance(data, list):
+            raise ValueError("expected a GitHub release list")
+        if data:
+            break
+        logger.warning("GitHub returned an empty release list for %s (attempt %d of %d, "
+                       "%d bytes: %r)", repo, attempt, len(_EMPTY_LIST_RETRY_WAITS) + 1,
+                       len(body), body[:200])
+        if not waits:
+            break
+        sleep(waits.pop(0))
     return [rel.get("tag_name", "") for rel in data
             if isinstance(rel, dict) and not rel.get("draft")
             and (include_prerelease or not rel.get("prerelease"))]
@@ -193,6 +218,7 @@ def resolve_status(
     current: Optional[str] = None,
     repo: Optional[str] = None,
     package: Optional[str] = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> UpdateStatus:
     """Compute current-vs-latest. ``source`` = 'pypi' | 'github'. Fail-soft, but the
     failure is *classified* (offline / not_found / no_releases / …) so the caller can
@@ -207,7 +233,8 @@ def resolve_status(
     error: Optional[str] = None
     try:
         raw = (pypi_versions(fetch, package) if source == "pypi"
-               else github_tag_versions(fetch, repo, include_prerelease=include_pre))
+               else github_tag_versions(fetch, repo, include_prerelease=include_pre,
+                                         sleep=sleep))
         latest = select_latest(raw, include_prerelease=include_pre)
         if latest is None:
             error = "no_releases"

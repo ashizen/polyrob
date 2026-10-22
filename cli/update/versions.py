@@ -199,7 +199,7 @@ def github_tag_versions(fetch: Callable[[str], str],
             raise ValueError("expected a GitHub release list")
         if data:
             break
-        logger.warning("GitHub returned an empty release list for %s (attempt %d of %d, "
+        logger.info("GitHub returned an empty release list for %s (attempt %d of %d, "
                        "%d bytes: %r)", repo, attempt, len(_EMPTY_LIST_RETRY_WAITS) + 1,
                        len(body), body[:200])
         if not waits:

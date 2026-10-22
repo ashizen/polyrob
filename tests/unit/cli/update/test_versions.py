@@ -110,7 +110,7 @@ def test_resolve_status_retries_a_transient_empty_github_list():
 
 
 def test_resolve_status_logs_each_empty_github_list(caplog):
-    with caplog.at_level(logging.WARNING, logger="cli.update.versions"):
+    with caplog.at_level(logging.INFO, logger="cli.update.versions"):
         st = resolve_status(channel="stable", fetch=lambda url: "[]",
                             source="github", current="0.4.2", repo="acme/widget",
                             sleep=lambda s: None)

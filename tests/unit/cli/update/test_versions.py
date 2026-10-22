@@ -109,14 +109,17 @@ def test_resolve_status_retries_a_transient_empty_github_list():
     assert len(waits) == 2
 
 
-def test_resolve_status_logs_each_empty_github_list(caplog):
-    with caplog.at_level(logging.INFO, logger="cli.update.versions"):
+def test_resolve_status_reports_and_logs_each_empty_github_list(caplog):
+    with caplog.at_level(logging.DEBUG, logger="cli.update.versions"):
         st = resolve_status(channel="stable", fetch=lambda url: "[]",
                             source="github", current="0.4.2", repo="acme/widget",
                             sleep=lambda s: None)
-    assert st.error == "no_releases"
+    assert st.error == "no_releases" and st.empty_replies == 3
+    # The user-facing note says what GitHub sent (the CLI and the boot log print it);
+    # the per-reply lines are DEBUG so `--check --json` output stays pure JSON.
+    assert "came back empty 3 time(s)" in st.human_note
     empties = [r for r in caplog.records if "empty release list" in r.getMessage()]
-    assert len(empties) == 3
+    assert len(empties) == 3 and all(r.levelno == logging.DEBUG for r in empties)
     assert "acme/widget" in empties[0].getMessage()
 
 
@@ -131,6 +134,7 @@ def test_filtered_out_releases_are_not_retried():
     st = resolve_status(channel="stable", fetch=fetch, source="github",
                         current="0.4.2", repo="acme/widget", sleep=lambda s: None)
     assert st.error == "no_releases" and len(calls) == 1
+    assert st.empty_replies == 0 and "came back empty" not in st.human_note
 
 
 def test_resolve_repo_env_override(monkeypatch):

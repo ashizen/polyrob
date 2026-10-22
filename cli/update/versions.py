@@ -81,6 +81,7 @@ class UpdateStatus:
     channel: str
     error: Optional[str] = None       # None | offline | not_found | no_releases | http_error | parse_error
     source_ref: str = ""              # the repo/package that was queried
+    empty_replies: int = 0            # GitHub release lists that came back as a bare []
 
     @property
     def update_available(self) -> bool:
@@ -100,6 +101,9 @@ class UpdateStatus:
             return (f"could not find {ref} — the repository/package may be private, "
                     "renamed, or not published yet")
         if self.error == "no_releases":
+            if self.empty_replies:
+                return (f"no releases published yet for {ref} (GitHub's release list "
+                        f"came back empty {self.empty_replies} time(s) in a row)")
             return f"no releases published yet for {ref}"
         if self.error in ("http_error", "parse_error"):
             return f"could not read the release list for {ref} ({self.error})"
@@ -199,7 +203,7 @@ def github_tag_versions(fetch: Callable[[str], str],
             raise ValueError("expected a GitHub release list")
         if data:
             break
-        logger.info("GitHub returned an empty release list for %s (attempt %d of %d, "
+        logger.debug("GitHub returned an empty release list for %s (attempt %d of %d, "
                        "%d bytes: %r)", repo, attempt, len(_EMPTY_LIST_RETRY_WAITS) + 1,
                        len(body), body[:200])
         if not waits:
@@ -231,10 +235,17 @@ def resolve_status(
 
     latest: Optional[str] = None
     error: Optional[str] = None
+    empties = [0]
+
+    def _counting_fetch(url: str) -> str:
+        body = fetch(url)
+        empties[0] = empties[0] + 1 if body.strip() == "[]" else 0
+        return body
+
     try:
         raw = (pypi_versions(fetch, package) if source == "pypi"
-               else github_tag_versions(fetch, repo, include_prerelease=include_pre,
-                                         sleep=sleep))
+               else github_tag_versions(_counting_fetch, repo,
+                                         include_prerelease=include_pre, sleep=sleep))
         latest = select_latest(raw, include_prerelease=include_pre)
         if latest is None:
             error = "no_releases"
@@ -242,4 +253,5 @@ def resolve_status(
         latest = None
         error = _classify_fetch_error(exc)
     return UpdateStatus(current=cur, latest=latest, channel=channel,
-                        error=error, source_ref=ref)
+                        error=error, source_ref=ref,
+                        empty_replies=empties[0] if error == "no_releases" else 0)
